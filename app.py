@@ -252,5 +252,60 @@ def return_book(book_id):
     
     return jsonify({'message': 'Book returned successfully'}), 200
 
+
+    @app.route('/books/<int:book_id>/reviews', methods=['POST'])
+    @jwt_required()
+    def create_review(book_id):
+        user_id = get_jwt_identity()
+        current_user = User.query.get(user_id)
+        if not current_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        book = Book.query.get(book_id)
+        if not book:
+            return jsonify({'error': 'Book not found'}), 404
+
+        if current_user not in book.past_borrowers:
+            return jsonify({'error': 'You must have borrowed this book before to leave a review'}), 403
+
+        data = request.get_json()
+        if not all(k in data for k in ['text', 'rating']):
+            return jsonify({'error': 'Missing required fields (text and rating)'}), 400
+
+        try:
+            rating = float(data['rating'])
+            if rating < 0 or rating > 10:
+                return jsonify({'error': 'Rating must be between 0 and 5'}), 400
+        except ValueError:
+            return jsonify({'error': 'Rating must be a number'}), 400
+
+        existing_review = Review.query.filter_by(
+            user_id=current_user.id,
+            book_id=book.id
+        ).first()
+
+        if existing_review:
+            return jsonify({'error': 'You have already reviewed this book'}), 400
+
+        review = Review(
+            text=data['text'],
+            rating=rating,
+            user_id=current_user.id,
+            book_id=book.id
+        )
+        db.session.add(review)
+
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Review created successfully',
+            'review': {
+                'id': review.id,
+                'text': review.text,
+                'rating': review.rating,
+                'user_name': current_user.name
+            }
+        }), 201
+
 if __name__ == '__main__':
     app.run(debug=True)
