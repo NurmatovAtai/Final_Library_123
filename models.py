@@ -3,6 +3,16 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 db = SQLAlchemy()
 
+user_borrowed_books = db.Table('user_borrowed_books',
+    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
+    db.Column('book_id', db.Integer, db.ForeignKey('book.id'), primary_key=True)
+)
+
+user_history_books = db.Table('user_history_books',
+    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
+    db.Column('book_id', db.Integer, db.ForeignKey('book.id'), primary_key=True)
+)
+
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -32,6 +42,10 @@ class Book(db.Model):
     author = db.Column(db.String(100), nullable=False)
     category_id = db.Column(db.Integer, db.ForeignKey('category.id'), nullable=False)
     reviews = db.relationship('Review', backref='book', lazy=True)
+
+    @property
+    def available(self):
+        return len(self.current_borrowers) == 0
     
     @property
     def rating(self):
@@ -53,12 +67,3 @@ class RequestedBorrow(db.Model):
     is_approved = db.Column(db.Boolean, default=False)
     book = db.relationship('Book', backref='borrow_requests')
 
-user_borrowed_books = db.Table('user_borrowed_books',
-    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
-    db.Column('book_id', db.Integer, db.ForeignKey('book.id'), primary_key=True)
-)
-
-user_history_books = db.Table('user_history_books',
-    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
-    db.Column('book_id', db.Integer, db.ForeignKey('book.id'), primary_key=True)
-)

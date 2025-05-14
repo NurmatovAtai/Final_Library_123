@@ -3,8 +3,10 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 from models import db, User, Category, Book, Review, RequestedBorrow
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta
+from flask_cors import CORS  # Add this import at the top
 
 app = Flask(__name__)
+CORS(app, origins=["http://127.0.0.1:5500"], supports_credentials=True)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///library.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = 'secret-key' 
@@ -61,6 +63,29 @@ def login():
         }
     }), 200
 
+@app.route('/user/history', methods=['GET'])
+@jwt_required()
+def get_user_history():
+    user_id = get_jwt_identity()
+    current_user = User.query.get(user_id)
+    if not current_user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    history_books = current_user.history_books
+    
+    user_reviews = {
+        review.book_id: {'text': review.text, 'rating': review.rating}
+        for review in current_user.given_ratings
+    }
+    
+    return jsonify([{
+        'id': book.id,
+        'name': book.name,
+        'author': book.author,
+        'category': book.category.name,
+        'review': user_reviews.get(book.id)
+    } for book in history_books]), 200
+
 @app.route('/categories', methods=['POST'])
 @jwt_required()
 def create_category():
@@ -84,25 +109,52 @@ def create_category():
     
     return jsonify({'message': 'Category created', 'id': category.id}), 201
 
-    @app.route('/categories', methods=['GET'])
-    def get_all_categories():
-        categories = Category.query.all()
-        return jsonify([
-            {
-                'id': category.id,
-                'name': category.name,
-                'books': [
-                    {
-                        'id': book.id,
-                        'name': book.name,
-                        'author': book.author,
-                        'rating': book.rating,
-                        'available': len(book.current_borrowers) == 0
-                    } for book in category.books
-                ]
-            } for category in categories
-        ]), 200
+@app.route('/categories', methods=['GET'])
+def get_all_categories():
+    categories = Category.query.all()
+    return jsonify([
+        {
+            'id': category.id,
+            'name': category.name,
+            'books': [
+                {
+                    'id': book.id,
+                    'name': book.name,
+                    'author': book.author,
+                    'rating': book.rating,
+                    'available': len(book.current_borrowers) == 0
+                } for book in category.books
+            ]
+        } for category in categories
+    ]), 200
 
+@app.route('/categories/<int:category_id>/books', methods=['GET'])
+def get_books_by_category(category_id):
+    category = Category.query.get(category_id)
+    if not category:
+        return jsonify({'error': 'Category not found'}), 404
+    
+    books = Book.query.filter_by(category_id=category_id).all()
+    
+    books_data = []
+    for book in books:
+        book_data = {
+            'id': book.id,
+        'name': book.name,
+        'author': book.author,
+        'category': book.category.name,
+        'rating': book.rating,
+        'current_borrowers': [{
+            'id': user.id,
+            'name': user.name,
+            'email': user.email
+        } for user in book.current_borrowers],
+        'available': len(book.current_borrowers) == 0,
+        'reviews': [{'id': r.id, 'text': r.text, 'rating': r.rating} for r in book.reviews]
+        }
+        books_data.append(book_data)
+    
+    return jsonify(books_data), 200
 
 @app.route('/books', methods=['GET'])
 def get_all_books():
@@ -113,6 +165,11 @@ def get_all_books():
         'author': book.author,
         'category': book.category.name,
         'rating': book.rating,
+        'current_borrowers': [{
+            'id': user.id,
+            'name': user.name,
+            'email': user.email
+        } for user in book.current_borrowers],
         'available': len(book.current_borrowers) == 0,
         'reviews': [{'id': r.id, 'text': r.text, 'rating': r.rating} for r in book.reviews]
     } for book in books]), 200
@@ -247,65 +304,67 @@ def return_book(book_id):
         return jsonify({'error': 'You have not borrowed this book'}), 400
     
     book.current_borrowers.remove(user)
-    book.past_borrowers.append(user)
+    
+    if user not in book.past_borrowers:
+        book.past_borrowers.append(user)
+    
     db.session.commit()
     
     return jsonify({'message': 'Book returned successfully'}), 200
 
-
-    @app.route('/books/<int:book_id>/reviews', methods=['POST'])
-    @jwt_required()
-    def create_review(book_id):
-        user_id = get_jwt_identity()
-        current_user = User.query.get(user_id)
-        if not current_user:
-            return jsonify({'error': 'User not found'}), 404
-
-        book = Book.query.get(book_id)
-        if not book:
-            return jsonify({'error': 'Book not found'}), 404
-
-        if current_user not in book.past_borrowers:
-            return jsonify({'error': 'You must have borrowed this book before to leave a review'}), 403
-
-        data = request.get_json()
-        if not all(k in data for k in ['text', 'rating']):
-            return jsonify({'error': 'Missing required fields (text and rating)'}), 400
-
-        try:
-            rating = float(data['rating'])
-            if rating < 0 or rating > 10:
-                return jsonify({'error': 'Rating must be between 0 and 5'}), 400
-        except ValueError:
-            return jsonify({'error': 'Rating must be a number'}), 400
-
-        existing_review = Review.query.filter_by(
-            user_id=current_user.id,
-            book_id=book.id
-        ).first()
-
-        if existing_review:
-            return jsonify({'error': 'You have already reviewed this book'}), 400
-
-        review = Review(
-            text=data['text'],
-            rating=rating,
-            user_id=current_user.id,
-            book_id=book.id
-        )
-        db.session.add(review)
-
-        db.session.commit()
-
-        return jsonify({
-            'message': 'Review created successfully',
-            'review': {
-                'id': review.id,
-                'text': review.text,
-                'rating': review.rating,
-                'user_name': current_user.name
-            }
-        }), 201
+@app.route('/books/<int:book_id>/reviews', methods=['POST'])
+@jwt_required()
+def create_review(book_id):
+    user_id = get_jwt_identity()
+    current_user = User.query.get(user_id)
+    if not current_user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    book = Book.query.get(book_id)
+    if not book:
+        return jsonify({'error': 'Book not found'}), 404
+    
+    if current_user not in book.past_borrowers:
+        return jsonify({'error': 'You must have borrowed this book before to leave a review'}), 403
+    
+    data = request.get_json()
+    if not all(k in data for k in ['text', 'rating']):
+        return jsonify({'error': 'Missing required fields (text and rating)'}), 400
+    
+    try:
+        rating = float(data['rating'])
+        if rating < 0 or rating > 5:
+            return jsonify({'error': 'Rating must be between 0 and 5'}), 400
+    except ValueError:
+        return jsonify({'error': 'Rating must be a number'}), 400
+    
+    existing_review = Review.query.filter_by(
+        user_id=current_user.id,
+        book_id=book.id
+    ).first()
+    
+    if existing_review:
+        return jsonify({'error': 'You have already reviewed this book'}), 400
+    
+    review = Review(
+        text=data['text'],
+        rating=rating,
+        user_id=current_user.id,
+        book_id=book.id
+    )
+    db.session.add(review)
+    
+    db.session.commit()
+    
+    return jsonify({
+        'message': 'Review created successfully',
+        'review': {
+            'id': review.id,
+            'text': review.text,
+            'rating': review.rating,
+            'user_name': current_user.name
+        }
+    }), 201
 
 if __name__ == '__main__':
     app.run(debug=True)
