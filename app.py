@@ -84,6 +84,26 @@ def create_category():
     
     return jsonify({'message': 'Category created', 'id': category.id}), 201
 
+    @app.route('/categories', methods=['GET'])
+    def get_all_categories():
+        categories = Category.query.all()
+        return jsonify([
+            {
+                'id': category.id,
+                'name': category.name,
+                'books': [
+                    {
+                        'id': book.id,
+                        'name': book.name,
+                        'author': book.author,
+                        'rating': book.rating,
+                        'available': len(book.current_borrowers) == 0
+                    } for book in category.books
+                ]
+            } for category in categories
+        ]), 200
+
+
 @app.route('/books', methods=['GET'])
 def get_all_books():
     books = Book.query.all()
@@ -93,7 +113,8 @@ def get_all_books():
         'author': book.author,
         'category': book.category.name,
         'rating': book.rating,
-        'available': len(book.current_borrowers) == 0
+        'available': len(book.current_borrowers) == 0,
+        'reviews': [{'id': r.id, 'text': r.text, 'rating': r.rating} for r in book.reviews]
     } for book in books]), 200
 
 @app.route('/books', methods=['POST'])
